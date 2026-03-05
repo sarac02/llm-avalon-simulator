@@ -9,3 +9,12 @@ avalon_role_agent.py — One player’s “brain”: builds prompts from role/st
 llm_caller.py — sends chat requests to the configured model, handles JSON extraction from model text, and retries/timeouts.
 
 run_game.py — Entry point: loads role briefs from the roles/ folder, prompts for player count, builds role list and agents, creates AvalonEnv, runs the game, and prints the outcome.
+
+
+<img width="500" height="313" alt="Screenshot 2026-03-05 at 3 04 05 AM" src="https://github.com/user-attachments/assets/d93f221b-a0f0-4555-958c-37c8f2ae9185" />
+
+
+<img width="502" height="313" alt="Screenshot 2026-03-05 at 3 04 18 AM" src="https://github.com/user-attachments/assets/1762ef7f-6574-493e-8b41-a09a2bc26285" />
+
+
+<img width="500" height="313" alt="Screenshot 2026-03-05 at 3 04 47 AM" src="https://github.com/user-attachments/assets/dda0d24f-04ee-4c34-b3d0-b3be0f6d50d9" />
