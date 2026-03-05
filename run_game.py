@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import json
+import random
+from pathlib import Path
+from typing import Any, Dict, List
+
+from env import AvalonConfig, AvalonEnv, mission_rules_for_players
+from avalon_role_agent import AvalonRoleAgent
+from llm_caller import AvalonLLMCaller
+
+
+ROOT = Path(__file__).resolve().parent
+ROLES_DIR = ROOT / "roles"
+
+
+def canonical_role_key(role_name: str) -> str:
+    return role_name.strip().lower().replace(" ", "_")
+
+
+def roles_from_folder() -> List[str]:
+    names = []
+    for p in sorted(ROLES_DIR.glob("*.ipynb")):
+        key = p.stem.replace("_", " ").strip().title()
+        if key == "Loyal Servant":
+            names.append("Loyal Servant")
+        elif key == "Minion Of Mordred":
+            names.append("Minion of Mordred")
+        else:
+            names.append(key)
+    return names
+
+
+def load_role_briefs() -> Dict[str, str]:
+    briefs: Dict[str, str] = {}
+    for nb_path in sorted(ROLES_DIR.glob("*.ipynb")):
+        key = nb_path.stem.lower()
+        try:
+            data = json.loads(nb_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        text_chunks: List[str] = []
+        for cell in data.get("cells", []):
+            if cell.get("cell_type") != "markdown":
+                continue
+            chunk = "".join(cell.get("source", [])).strip()
+            if chunk:
+                text_chunks.append(chunk)
+            if len("\n\n".join(text_chunks)) > 1000:
+                break
+        briefs[key] = "\n\n".join(text_chunks)[:1200]
+    return briefs
+
+
+def prompt_num_players() -> int:
+    while True:
+        raw = input("Enter number of players (5-10): ").strip()
+        try:
+            n = int(raw)
+        except ValueError:
+            print("Please enter an integer from 5 to 10.")
+            continue
+        if 5 <= n <= 10:
+            return n
+        print("Invalid value. Number of players must be between 5 and 10.")
+
+
+def evil_count_for_players(num_players: int) -> int:
+    # Standard Avalon
+    return {5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}[num_players]
+
+
+def build_role_list(num_players: int) -> List[str]:
+    """
+    Uses role pool from the roles folder and fills remaining good slots with Loyal Servant.
+    Constraint requested: at least 2 Loyal Servants when num_players > 5.
+    """
+    available = set(roles_from_folder())
+    evil_target = evil_count_for_players(num_players)
+    good_target = num_players - evil_target
+
+    good_specials = [r for r in ["Merlin", "Percival"] if r in available]
+    evil_specials = [r for r in ["Assassin", "Morgana", "Mordred", "Minion of Mordred"] if r in available]
+
+    if "Assassin" not in evil_specials:
+        raise RuntimeError("roles folder must include Assassin role notebook.")
+    if "Merlin" not in good_specials:
+        raise RuntimeError("roles folder must include Merlin role notebook.")
+
+    evil_roles = ["Assassin"]
+    for role in evil_specials:
+        if role == "Assassin":
+            continue
+        if len(evil_roles) >= evil_target:
+            break
+        evil_roles.append(role)
+    good_roles = ["Merlin"]
+    for role in good_specials:
+        if role == "Merlin":
+            continue
+        if len(good_roles) >= good_target:
+            break
+        good_roles.append(role)
+    loyal_count = good_target - len(good_roles)
+
+    if num_players > 5 and loyal_count < 2:
+        # Reduce optional good special first to satisfy requested constraint.
+        while loyal_count < 2 and len(good_roles) > 1:
+            good_roles.pop()
+            loyal_count += 1
+
+    good_roles += ["Loyal Servant"] * loyal_count
+    roles = good_roles + evil_roles
+    return roles
+
+
+def main():
+    print("Avalon rules in this simulator:")
+    print("- No night kill/save/police phase (those are Mafia/Werewolf mechanics).")
+    print("- Loop: discussion -> proposal -> vote; rejected teams rotate leader.")
+    print("- Official Avalon rule: if the 5th proposal is rejected, Evil wins immediately.")
+    print("- Good wins at 3 successful quests; Evil wins at 3 failed quests.")
+    print("- If Good reaches 3 successes, Assassin gets one Merlin guess to steal win.")
+
+    num_players = prompt_num_players()
+    role_list = build_role_list(num_players)
+    names = [f"P{i}" for i in range(num_players)]
+    random.shuffle(role_list)
+    lineup = list(zip(names, role_list))
+
+    names = [n for n, _ in lineup]
+    role_map = {n: r for n, r in lineup}
+    role_briefs = load_role_briefs()
+    llm_backend: Any = AvalonLLMCaller(timeout=60, retries=2, temperature=0.45)
+    try:
+        llm_backend.generate(
+            system="Return valid JSON only.",
+            user='{"ok": true}',
+            max_tokens=16,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Real LLM backend is unavailable. Install/configure OpenAI-compatible client "
+            "(e.g., pip install openai) and set OPENAI_API_KEY + AVALON_API_BASE before running the game."
+        ) from exc
+
+    agents: List[Any] = []
+    for name in names:
+        role_key = canonical_role_key(role_map[name]).replace(" ", "_")
+        role_file_key = role_key
+        if role_file_key == "servant":
+            role_file_key = "loyal_servant"
+        brief = role_briefs.get(role_file_key, "")
+        agents.append(AvalonRoleAgent(name=name, role=role_map[name], llm=llm_backend, role_notes=brief))
+    team_sizes, fails_required = mission_rules_for_players(len(agents))
+    cfg = AvalonConfig(
+        num_players=len(agents),
+        team_sizes=team_sizes,
+        fails_required=fails_required,
+        seed=random.randint(0, 10_000_000),
+        discussion_turns=len(agents),
+        post_proposal_discussion_turns=0,
+        verbose=True,
+        strict_agent_errors=True,
+    )
+
+    env = AvalonEnv(agents=agents, roles=role_map, config=cfg)
+    env.reset(leader_idx=0)
+    final = env.run_game()
+
+
+if __name__ == "__main__":
+    main()
