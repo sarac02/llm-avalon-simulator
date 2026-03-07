@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-import random
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -16,6 +17,11 @@ ROLES_DIR = ROOT / "roles"
 
 def canonical_role_key(role_name: str) -> str:
     return role_name.strip().lower().replace(" ", "_")
+
+
+def is_evil_role(role_name: str) -> bool:
+    key = canonical_role_key(role_name)
+    return any(tag in key for tag in ("assassin", "minion", "morgana", "mordred"))
 
 
 def roles_from_folder() -> List[str]:
@@ -116,6 +122,7 @@ def build_role_list(num_players: int) -> List[str]:
 
 def main():
     print("Avalon rules in this simulator:")
+    print("- No night kill/save/police phase (those are Mafia/Werewolf mechanics).")
     print("- Loop: discussion -> proposal -> vote; rejected teams rotate leader.")
     print("- Official Avalon rule: if the 5th proposal is rejected, Evil wins immediately.")
     print("- Good wins at 3 successful quests; Evil wins at 3 failed quests.")
@@ -124,6 +131,8 @@ def main():
     num_players = prompt_num_players()
     role_list = build_role_list(num_players)
     names = [f"P{i}" for i in range(num_players)]
+    # Shuffle roles each game so assignments can change run-to-run.
+    import random
     random.shuffle(role_list)
     lineup = list(zip(names, role_list))
 
@@ -158,16 +167,64 @@ def main():
         fails_required=fails_required,
         seed=random.randint(0, 10_000_000),
         discussion_turns=len(agents),
-        post_proposal_discussion_turns=0,
+        post_proposal_discussion_turns=len(agents),  # everyone speaks once after proposal for richer debate
         verbose=True,
         strict_agent_errors=True,
+        log_output_path=os.environ.get("AVALON_LOG_OUTPUT"),  # e.g. AVALON_LOG_OUTPUT=avalon_outputs.jsonl
     )
 
     env = AvalonEnv(agents=agents, roles=role_map, config=cfg)
     env.reset(leader_idx=0)
     final = env.run_game()
 
+    # Write transcript and accusations to logs/ (one timestamp per run)
+    logs_dir = ROOT / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = logs_dir / f"log_{ts}.txt"
+    acc_path = logs_dir / f"accusations_{ts}.json"
+    try:
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(final.transcript))
+        print(f"\nGame transcript written to {log_path}")
+    except Exception:
+        pass
+    try:
+        with open(acc_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "winner": final.winner,
+                "reason": final.reason,
+                "score_good": final.score_good,
+                "score_evil": final.score_evil,
+                "round_idx": final.round_idx,
+                "roles": role_map,
+                "accusations": getattr(final, "accusations", []),
+            }, f, indent=2, ensure_ascii=False)
+        print(f"Accusation vectors written to {acc_path}")
+    except Exception:
+        pass
+
+    print("\n" + "=" * 50)
+    print("=== GAME OVER ===")
+    print("=" * 50)
+    print("Winner:", final.winner)
+    print("Reason:", final.reason)
+    print("Final score: Good", final.score_good, ":", "Evil", final.score_evil)
+    print("=" * 50)
+    print("\nPlayers:", ", ".join(names))
+    print("Roles:", role_map)
+    print("--- Full Event Log ---")
+    for e in final.public_events:
+        print(e.type, e.payload)
+    print("--- Full Conversation Transcript ---")
+    for speaker, text in final.chat_log:
+        print(f"{speaker}: {text}")
+    print("--- Accusation vectors (for RL) ---")
+    for a in getattr(final, "accusations", []):
+        r = a.get("reasoning", "") or ""
+        r_short = (r[:80] + "...") if len(r) > 80 else r
+        print(f"  {a.get('speaker')}: evil={a.get('evil_suspects', [])}, good={a.get('good_suspects', [])}, reasoning: {r_short}")
+
 
 if __name__ == "__main__":
-
     main()

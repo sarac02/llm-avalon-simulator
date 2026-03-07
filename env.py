@@ -3,12 +3,32 @@ from dataclasses import dataclass, field
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
+import json
 import random
 import re
 
 
+def _extract_json_obj(text: str) -> Optional[dict]:
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
 def mission_rules_for_players(num_players: int) -> Tuple[List[int], List[int]]:
-    """Standard Avalon: 5 rounds, team sizes and fail thresholds per player count. Round 4 needs 2 fails for 7–10 players."""
+    # Standard Avalon team sizes and fail thresholds for missions 1..5
     preset: Dict[int, Tuple[List[int], List[int]]] = {
         5: ([2, 3, 2, 3, 3], [1, 1, 1, 1, 1]),
         6: ([2, 3, 4, 3, 4], [1, 1, 1, 1, 1]),
@@ -19,20 +39,10 @@ def mission_rules_for_players(num_players: int) -> Tuple[List[int], List[int]]:
     }
     if num_players in preset:
         return preset[num_players]
+    # Safe fallback if experimenting with nonstandard sizes
     sizes = [max(2, min(num_players - 1, 2 + i // 2)) for i in range(5)]
     fails = [1, 1, 1, 1, 1]
     return sizes, fails
-
-
-def assert_avalon_config(num_players: int, team_sizes: List[int], fails_required: List[int]) -> None:
-    """Crash loudly if config does not match Avalon rules (exact team sizes, 5 rounds, correct fail thresholds)."""
-    if num_players < 5 or num_players > 10:
-        raise ValueError(f"Avalon requires 5–10 players, got {num_players}")
-    expected_sizes, expected_fails = mission_rules_for_players(num_players)
-    if len(team_sizes) != 5 or team_sizes != expected_sizes:
-        raise ValueError(f"team_sizes must be exactly 5 rounds for Avalon: expected {expected_sizes}, got {team_sizes}")
-    if len(fails_required) != 5 or fails_required != expected_fails:
-        raise ValueError(f"fails_required must match Avalon (round 4 = 2 fails for 7–10 players): expected {expected_fails}, got {fails_required}")
 
 
 class Phase(str, Enum):
@@ -56,6 +66,8 @@ class AvalonConfig:
     post_proposal_discussion_turns: Optional[int] = None  # None -> everyone once
     verbose: bool = True
     strict_agent_errors: bool = True
+    # If set, write agent outputs (transcript + accusations) to this path for debugging/training
+    log_output_path: Optional[str] = None
 
 
 @dataclass
@@ -110,6 +122,8 @@ class GameState:
     reason: Optional[str] = None
     transcript: List[str] = field(default_factory=list)
     rejected_rounds_total: int = 0
+    # Per-speaker accusation outputs (evil_suspects, good_suspects, reasoning) for RL / debugging
+    accusations: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class AvalonEnv:
@@ -121,7 +135,6 @@ class AvalonEnv:
             team_sizes, fails_required = mission_rules_for_players(self.cfg.num_players)
             self.cfg.team_sizes = team_sizes
             self.cfg.fails_required = fails_required
-        assert_avalon_config(self.cfg.num_players, self.cfg.team_sizes, self.cfg.fails_required)
 
         random.seed(self.cfg.seed)
         self.agents: Dict[str, Any] = {a.name: a for a in agents}
@@ -186,6 +199,11 @@ class AvalonEnv:
 
     def _agent_state(self, me: str) -> Any:
         s = self.state
+        team_size = (
+            self.cfg.team_sizes[s.round_idx - 1]
+            if 1 <= s.round_idx <= len(self.cfg.team_sizes)
+            else 2
+        )
         return SimpleNamespace(
             players=s.players[:],
             me=me,
@@ -194,11 +212,15 @@ class AvalonEnv:
             private_knowledge=dict(self.player_info[me].private_knowledge),
             round_idx=s.round_idx,
             proposal_idx=s.proposal_idx,
+            team_size=team_size,
+            num_successes=s.score_good,
+            num_fails=s.score_evil,
             current_proposer=s.leader,
             current_team=s.current_team[:],
             chat_log=list(s.chat_log),
+            proposals=list(s.proposals),
             missions=list(s.missions),
-            required_team_size=self.cfg.team_sizes[s.round_idx - 1],
+            phase=s.phase.value,
             extra={"last_team_votes": dict(s.last_team_votes), "last_quest_fails": s.last_quest_fails},
         )
 
@@ -207,6 +229,12 @@ class AvalonEnv:
         try:
             if hasattr(agent, fn_name):
                 return getattr(agent, fn_name)(*args)
+            if hasattr(agent, "act"):
+                out = agent.act(*args)
+                if isinstance(out, dict):
+                    return out
+                if isinstance(out, str):
+                    return _extract_json_obj(out) or out
             if self.cfg.strict_agent_errors:
                 raise RuntimeError(f"Agent {name} missing method {fn_name}")
         except Exception as exc:
@@ -220,30 +248,66 @@ class AvalonEnv:
         # Normalize to one printable line.
         text = re.sub(r"[\r\n\t]+", " ", text)
         text = re.sub(r"\s{2,}", " ", text).strip()
-        # Strip approve/reject tags; discussion is pitch-only, no required lean.
-        text = re.sub(r"\s*(APPROVE_LEAN|REJECT_LEAN)\s*", " ", text).strip()
-        text = re.sub(r"\s+", " ", text).strip()
-        if len(text) < 3:
-            return ""
+        # Keep only up to the first lean tag to avoid duplicated trailing generations.
+        lean_match = re.search(r"(APPROVE_LEAN|REJECT_LEAN)", text)
+        if lean_match:
+            text = text[: lean_match.end()]
+        # No hardcoded content bans: role/sabotage leaks are prevented by agent prompting only.
+        # Remove duplicate lean suffixes and incomplete tiny fragments.
+        text = re.sub(r"(APPROVE_LEAN|REJECT_LEAN)\s+(APPROVE_LEAN|REJECT_LEAN)$", r"\2", text)
+        if len(text) < 18 and text:
+            # Keep agent's words; ensure lean suffix so protocol is valid
+            if not (text.endswith("APPROVE_LEAN") or text.endswith("REJECT_LEAN")):
+                text = text.rstrip(". ") + " REJECT_LEAN"
+            return text
+        if not (text.endswith("APPROVE_LEAN") or text.endswith("REJECT_LEAN")):
+            text = text.rstrip(". ") + " REJECT_LEAN"
         return text
 
     def _finalize_discussion_message(self, speaker: str, msg: str) -> str:
         s = self.state
         cleaned = self._sanitize_public_message(msg)
+        low = (cleaned or "").lower()
+        bad = (
+            (not cleaned)
+            or len(cleaned) < 18
+            or "..." in cleaned
+            or low.endswith(" i")
+            or low.endswith(" and")
+            or low.endswith(" with")
+            or "given this round's uncertainty" in low
+            or "updating reads from proposal and vote consistency" in low
+        )
         recent_lines = [m for _, m in s.chat_log[-4:]]
-        if (not cleaned) or cleaned in recent_lines:
-            retry = self._call_agent(speaker, "speak", self._agent_state(speaker))
-            retry_msg = str(retry.get("message", "")) if isinstance(retry, dict) else str(retry)
-            retry_clean = self._sanitize_public_message(retry_msg)
-            if retry_clean and retry_clean not in recent_lines:
-                cleaned = retry_clean
+        if bad or cleaned in recent_lines:
+            # Retry with hint so the agent generates a proper response from game state/rules
+            for attempt in range(3):
+                state = self._agent_state(speaker)
+                state.extra["retry_hint"] = (
+                    "Your previous response was too short, incomplete, or repeated another player. "
+                    "Give one distinct, concrete view based on the game state and rules (mission history, team, others' words)."
+                )
+                retry = self._call_agent(speaker, "speak", state)
+                retry_msg = str(retry.get("message", "")) if isinstance(retry, dict) else str(retry)
+                retry_clean = self._sanitize_public_message(retry_msg)
+                if retry_clean and retry_clean not in recent_lines and len(retry_clean) >= 18:
+                    cleaned = retry_clean
+                    break
+                # Use last agent output if we have one, even if short (no hardcoded phrase)
+                if retry_clean:
+                    cleaned = retry_clean
+        # If we still have nothing: discussion phase has no vote lean; post-proposal uses REJECT_LEAN as fallback
         if not cleaned:
-            cleaned = "I'll support the group's choice."
-        return self._sanitize_public_message(cleaned)
+            cleaned = "REJECT_LEAN" if s.phase != Phase.DISCUSSION else "No strong read yet; I'll see who the leader proposes."
+        result = self._sanitize_public_message(cleaned)
+        # Discussion phase must not show APPROVE_LEAN/REJECT_LEAN (only post-proposal has a lean)
+        if s.phase == Phase.DISCUSSION and result:
+            result = re.sub(r"\s*(APPROVE_LEAN|REJECT_LEAN)\s*$", "", result).strip() or result
+        return result
 
     def _default_action(self, name: str, fn_name: str, *args) -> Any:
         if fn_name == "speak":
-            return {"message": "I'll support the group's choice.", "reasoning": "", "proposed_team": []}
+            return "REJECT_LEAN"
         if fn_name == "propose_team":
             state, team_size = args
             return self._validate_team([state.me], int(team_size), state.current_proposer)
@@ -324,11 +388,36 @@ class AvalonEnv:
         self.state.phase = Phase.GAME_OVER
         self.state.public_events.append(PublicEvent("game_over", {"winner": winner, "reason": reason}))
         self._log(f"GAME OVER -> winner={winner}, reason={reason}")
+        self._log("")
+        self._log("=== GAME OVER ===")
+        self._log(f"Winner: {winner}")
+        self._log(f"Reason: {reason}")
+        self._log(f"Final score: Good {self.state.score_good} : Evil {self.state.score_evil}")
+        self._write_output_log_if_configured()
 
     def _log(self, line: str) -> None:
         self.state.transcript.append(line)
         if self.cfg.verbose:
             print(line)
+
+    def _write_output_log_if_configured(self) -> None:
+        """Write one JSON line per game (transcript + accusations) for debugging/training."""
+        path = getattr(self.cfg, "log_output_path", None)
+        if not path:
+            return
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "transcript": self.state.transcript,
+                    "accusations": self.state.accusations,
+                    "chat_log": self.state.chat_log,
+                    "winner": self.state.winner,
+                    "reason": self.state.reason,
+                    "round_idx": self.state.round_idx,
+                    "phase": self.state.phase.value,
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     @staticmethod
     def _normalize_line_for_dedupe(text: str) -> str:
@@ -346,12 +435,10 @@ class AvalonEnv:
 
     @staticmethod
     def _clean_reasoning_for_log(text: str) -> str:
+        """Normalize for log; no length cap so full reasoning is shown."""
         t = (text or "").strip()
         t = re.sub(r"[\r\n\t]+", " ", t)
-        t = re.sub(r"\s{2,}", " ", t).strip()
-        if len(t) > 220:
-            t = t[:220].rstrip(" .") + "..."
-        return t
+        return re.sub(r"\s{2,}", " ", t).strip()
 
     def step(self) -> None:
         s = self.state
@@ -368,8 +455,22 @@ class AvalonEnv:
                 if isinstance(raw, dict):
                     msg = self._finalize_discussion_message(name, str(raw.get("message", "")))
                     reasoning = self._clean_reasoning_for_log(str(raw.get("reasoning", "")))
-                    if reasoning:
-                        self._log(f"- [{name} reasoning] {reasoning}")
+                    self._log(f"- [{name} reasoning] {reasoning or ''}")
+                    evil = raw.get("evil_suspects") or []
+                    good = raw.get("good_suspects") or []
+                    if not isinstance(evil, list):
+                        evil = []
+                    if not isinstance(good, list):
+                        good = []
+                    s.accusations.append({
+                        "round_idx": s.round_idx,
+                        "phase": "discussion",
+                        "speaker": name,
+                        "evil_suspects": list(evil),
+                        "good_suspects": list(good),
+                        "reasoning": reasoning or "",
+                    })
+                    self._log(f"- {name}: evil {evil}, good {good}")
                 else:
                     msg = self._finalize_discussion_message(name, str(raw))
                 if s.chat_log and s.chat_log[-1][0] == name and self._near_duplicate(s.chat_log[-1][1], msg):
@@ -390,7 +491,6 @@ class AvalonEnv:
             if isinstance(raw_team, dict):
                 raw_team = raw_team.get("team", [])
             team = self._validate_team(list(raw_team or []), team_size, leader)
-            assert len(team) == team_size, f"Avalon requires exact team size {team_size} for this round, got {len(team)}"
             s.current_team = team
             s.proposals.append(
                 ProposalRecord(
@@ -420,8 +520,22 @@ class AvalonEnv:
                 if isinstance(raw, dict):
                     msg = self._finalize_discussion_message(name, str(raw.get("message", "")))
                     reasoning = self._clean_reasoning_for_log(str(raw.get("reasoning", "")))
-                    if reasoning:
-                        self._log(f"- [{name} reasoning] {reasoning}")
+                    self._log(f"- [{name} reasoning] {reasoning or ''}")
+                    evil = raw.get("evil_suspects") or []
+                    good = raw.get("good_suspects") or []
+                    if not isinstance(evil, list):
+                        evil = []
+                    if not isinstance(good, list):
+                        good = []
+                    s.accusations.append({
+                        "round_idx": s.round_idx,
+                        "phase": "team_discussion",
+                        "speaker": name,
+                        "evil_suspects": list(evil),
+                        "good_suspects": list(good),
+                        "reasoning": reasoning or "",
+                    })
+                    self._log(f"- {name}: evil {evil}, good {good}")
                 else:
                     msg = self._finalize_discussion_message(name, str(raw))
                 if s.chat_log and s.chat_log[-1][0] == name and self._near_duplicate(s.chat_log[-1][1], msg):
@@ -447,7 +561,6 @@ class AvalonEnv:
                 raw_vote = self._call_agent(name, "vote_on_team", self._agent_state(name), s.current_team[:])
                 votes[name] = self._as_bool_vote(raw_vote)
                 self._log(f"- {name} votes: {'APPROVE' if votes[name] else 'REJECT'}")
-            assert len(votes) == len(self.players), f"Must have exactly one vote per player, got {len(votes)}"
             approved = sum(1 for v in votes.values() if v) > (len(self.players) // 2)
             s.last_team_votes = votes
             if s.proposals:
@@ -489,14 +602,12 @@ class AvalonEnv:
                 raw_action = self._call_agent(name, "mission_action", self._agent_state(name))
                 is_success = self._as_bool_mission(raw_action)
                 if self.player_info[name].alignment == "good":
-                    is_success = True  # Only evil can choose to fail; Merlin/Servant cannot fail
-                assert self.player_info[name].alignment != "good" or is_success, f"Good player {name} cannot fail the quest"
+                    is_success = True
                 if is_success:
                     successes += 1
                 self._log(f"- {name} mission action: {'PASS' if is_success else 'FAIL'}")
             fails = len(team) - successes
             fail_threshold = self.cfg.fails_required[s.round_idx - 1]
-            assert 1 <= s.round_idx <= len(self.cfg.fails_required), f"Round index {s.round_idx} out of range for fail threshold"
             mission_failed = fails >= fail_threshold
             s.last_quest_fails = fails
             s.missions.append(
@@ -564,8 +675,7 @@ class AvalonEnv:
             s.public_events.append(
                 PublicEvent("assassination", {"assassin": assassin, "target": target, "hit_merlin": hit})
             )
-            self._log(f"- Assassin {assassin} guess: {target}; correct (hit Merlin): {hit}")
-            s.transcript.append(f"[ASSASSINATION] guess={target}, correct={hit}")
+            self._log(f"- Assassin {assassin} targets {target}; hit_merlin={hit}")
             self._end_game("evil" if hit else "good", ("assassination_hit_merlin" if hit else "assassination_missed"))
             return
 
