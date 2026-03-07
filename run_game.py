@@ -122,8 +122,6 @@ def build_role_list(num_players: int) -> List[str]:
 
 def main():
     print("Avalon rules in this simulator:")
-    print("- No night kill/save/police phase (those are Mafia/Werewolf mechanics).")
-    print("- Loop: discussion -> proposal -> vote; rejected teams rotate leader.")
     print("- Official Avalon rule: if the 5th proposal is rejected, Evil wins immediately.")
     print("- Good wins at 3 successful quests; Evil wins at 3 failed quests.")
     print("- If Good reaches 3 successes, Assassin gets one Merlin guess to steal win.")
@@ -227,4 +225,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
