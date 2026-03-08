@@ -77,11 +77,16 @@ def evil_count_for_players(num_players: int) -> int:
 
 
 def build_role_list(num_players: int) -> List[str]:
-    """
-    Uses role pool from the roles folder and fills remaining good slots with Loyal Servant.
-    Constraint requested: at least 2 Loyal Servants when num_players > 5.
-    """
     available = set(roles_from_folder())
+
+    if num_players == 6:
+        print('5 player system used')
+        required = ["Merlin", "Loyal Servant", "Loyal Servant", "Assassin", "Minion of Mordred"]
+        missing = [r for r in {"Merlin", "Loyal Servant", "Assassin", "Minion of Mordred"} if r not in available]
+        if missing:
+            raise RuntimeError(f"roles folder is missing required 5-player roles: {missing}")
+        return required
+
     evil_target = evil_count_for_players(num_players)
     good_target = num_players - evil_target
 
@@ -100,6 +105,7 @@ def build_role_list(num_players: int) -> List[str]:
         if len(evil_roles) >= evil_target:
             break
         evil_roles.append(role)
+
     good_roles = ["Merlin"]
     for role in good_specials:
         if role == "Merlin":
@@ -107,10 +113,10 @@ def build_role_list(num_players: int) -> List[str]:
         if len(good_roles) >= good_target:
             break
         good_roles.append(role)
+
     loyal_count = good_target - len(good_roles)
 
     if num_players > 5 and loyal_count < 2:
-        # Reduce optional good special first to satisfy requested constraint.
         while loyal_count < 2 and len(good_roles) > 1:
             good_roles.pop()
             loyal_count += 1
@@ -183,6 +189,10 @@ def main():
     acc_path = logs_dir / f"accusations_{ts}.json"
     try:
         with open(log_path, "w", encoding="utf-8") as f:
+            f.write("=== ROLE ASSIGNMENTS ===\n")
+            for player in names:
+                f.write(f"{player}: {role_map[player]}\n")
+            f.write("\n=== GAME TRANSCRIPT ===\n")
             f.write("\n".join(final.transcript))
         print(f"\nGame transcript written to {log_path}")
     except Exception:
