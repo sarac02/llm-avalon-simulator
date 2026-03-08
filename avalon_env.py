@@ -164,8 +164,10 @@ class AvalonEnv:
         for name in self.players:
             role = roles[name]
             rl = role.lower()
+            # Determine alignment from known evil-role substrings. 'mordred' removed since
+            # the Mordred role is being removed from the codebase.
             alignment = "evil" if (
-                "assassin" in rl or "minion" in rl or "morgana" in rl or "oberon" in rl or "mordred" in rl
+                "assassin" in rl or "minion" in rl or "morgana" in rl or "oberon" in rl
             ) else "good"
             self.player_info[name] = PlayerInfo(name=name, role=role, alignment=alignment)
 

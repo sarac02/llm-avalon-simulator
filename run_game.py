@@ -21,7 +21,7 @@ def canonical_role_key(role_name: str) -> str:
 
 def is_evil_role(role_name: str) -> bool:
     key = canonical_role_key(role_name)
-    return any(tag in key for tag in ("assassin", "minion", "morgana", "mordred"))
+    return any(tag in key for tag in ("assassin", "minion", "morgana"))
 
 
 def roles_from_folder() -> List[str]:
@@ -91,7 +91,7 @@ def build_role_list(num_players: int) -> List[str]:
     good_target = num_players - evil_target
 
     good_specials = [r for r in ["Merlin", "Percival"] if r in available]
-    evil_specials = [r for r in ["Assassin", "Morgana", "Mordred", "Minion of Mordred"] if r in available]
+    evil_specials = [r for r in ["Assassin", "Morgana", "Minion of Mordred"] if r in available]
 
     if "Assassin" not in evil_specials:
         raise RuntimeError("roles folder must include Assassin role notebook.")

@@ -146,7 +146,9 @@ class AvalonEnv:
         for name in self.players:
             role = roles.get(name, "Loyal Servant")
             role_l = role.lower()
-            is_evil = any(x in role_l for x in ["assassin", "minion", "morgana", "mordred"])
+            # Determine evil alignment from common evil role keywords. Mordred is removed
+            # since we no longer special-case it; all evil roles should be visible to Merlin.
+            is_evil = any(x in role_l for x in ["assassin", "minion", "morgana"])
             self.player_info[name] = PlayerInfo(name=name, role=role, alignment=("evil" if is_evil else "good"))
 
         evil_players = [p for p in self.players if self.player_info[p].alignment == "evil"]
@@ -158,12 +160,9 @@ class AvalonEnv:
             info = self.player_info[name].private_knowledge
             info["known_evil_players"] = []
 
-            # Merlin sees evil players except Mordred.
+            # Merlin sees all evil players (no special hiding of Mordred).
             if "merlin" in role_l:
-                info["known_evil_players"] = [
-                    p for p in evil_players
-                    if "mordred" not in self.player_info[p].role.lower() and p != name
-                ]
+                info["known_evil_players"] = [p for p in evil_players if p != name]
                 # Backward-compatible key used by current agents.
                 info["evil_players"] = list(info["known_evil_players"])
 
