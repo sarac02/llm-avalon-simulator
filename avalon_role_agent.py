@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import random
 from typing import Any, Dict, List
 
 from llm_caller import AvalonLLMCaller, _extract_json_obj
@@ -760,19 +761,18 @@ class AvalonRoleAgent:
 
     def assassinate(self, state):
         game_summary = self._game_context_summary(state)
-        merlin_rl_hint = self._format_merlin_rl_hint(state)
         user = (
-            'Output JSON: {"target": string, "reasoning": string}\n\n'
+            'Output JSON with keys "target" and "reasoning". '
+            'target: one player id, e.g. "P0" or "P1". reasoning: why you suspect they are Merlin.\n\n'
             "Good has won 3 quests. You (Assassin) get one guess to kill Merlin. If you kill Merlin, Evil wins.\n\n"
             f"Players: {state.players}. You are {self.name} (do not target yourself).\n\n"
             "Game history:\n"
             f"{game_summary}\n\n"
-            f"{merlin_rl_hint}"
             "Recent discussion:\n"
             f"{self._chat(state)}\n\n"
             "Choose one player id as target (the player you believe is Merlin). "
             "Merlin often: gave information that helped good, was on successful teams, or was trusted by others. "
-            "reasoning: one sentence explaining why you suspect this player. Use only public information."
+            "reasoning: explain why you suspect this player. Use only public information."
         )
         obj = self._force_json(
             system=self._system(state),
@@ -780,14 +780,35 @@ class AvalonRoleAgent:
             schema='{"target": string, "reasoning": string}',
             max_tokens=140,
         )
-        self.last_reasoning = self._clean_text(str(obj.get("reasoning", "")))
-        target = str(obj.get("target", "")).strip()
-        if target in state.players and target != self.name:
-            return target
-        for p in state.players:
-            if p != self.name:
-                return p
-        return self.name
+        reasoning = self._clean_text(str(obj.get("reasoning", "") or ""))
+        self.last_reasoning = reasoning or ""
+
+        raw = obj.get("target", obj.get("guess"))
+        target = None
+        if raw is not None:
+            s = str(raw).strip()
+            if s in state.players and s != self.name:
+                target = s
+            elif s.isdigit() and 0 <= int(s) < len(state.players):
+                p = state.players[int(s)]
+                if p != self.name:
+                    target = p
+            else:
+                m = re.search(r"p\s*(\d+)|\b(\d+)\b", s.lower())
+                if m:
+                    idx = int(m.group(1) or m.group(2))
+                    if 0 <= idx < len(state.players):
+                        p = state.players[idx]
+                        if p != self.name:
+                            target = p
+
+        if target is not None:
+            return {"target": target, "reasoning": reasoning}
+        candidates = [p for p in state.players if p != self.name]
+        fallback = random.choice(candidates) if candidates else self.name
+        return {"target": fallback, "reasoning": (reasoning ) + " [Fallback: target invalid.]"}
+
+
     
     def _get_merlin_scores(self, state) -> Dict[str, float] | None:
         if not self.use_rl or self.merlin_policy is None:

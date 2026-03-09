@@ -323,10 +323,9 @@ class AvalonEnv:
             # Good pass, evil strategic fail.
             return self.player_info[name].alignment != "evil" or self.state.score_good < 2
         if fn_name == "assassinate":
-            for p in self.players:
-                if p != name:
-                    return p
-            return name
+            candidates = [p for p in self.players if p != name]
+            target = random.choice(candidates) if candidates else name
+            return {"target": target, "reasoning": "[Default: no agent response.]"}
         return None
 
     @staticmethod
@@ -668,19 +667,24 @@ class AvalonEnv:
                 return
 
             target_raw = self._call_agent(assassin, "assassinate", self._agent_state(assassin))
+            reasoning = ""
             if isinstance(target_raw, dict):
+                reasoning = target_raw.get("reasoning", "")
                 target_raw = target_raw.get("target", target_raw.get("guess", ""))
             if isinstance(target_raw, int):
                 target = self.players[target_raw] if 0 <= target_raw < len(self.players) else ""
             else:
                 target = str(target_raw)
             if target == assassin or target not in self.players:
-                target = next((p for p in self.players if p != assassin), assassin)
+                candidates = [p for p in self.players if p != assassin]
+                target = random.choice(candidates) if candidates else assassin
 
             hit = target == merlin
             s.public_events.append(
                 PublicEvent("assassination", {"assassin": assassin, "target": target, "hit_merlin": hit})
             )
+            if reasoning:
+                self._log(f"- [{assassin} assassination reasoning] {reasoning}")
             self._log(f"- Assassin {assassin} targets {target}; hit_merlin={hit}")
             self._end_game("evil" if hit else "good", ("assassination_hit_merlin" if hit else "assassination_missed"))
             return
