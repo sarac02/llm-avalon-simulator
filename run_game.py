@@ -11,7 +11,7 @@ from avalon_role_agent import AvalonRoleAgent
 from llm_caller import AvalonLLMCaller
 
 
-USE_RL = True
+USE_RL = False
 MERLIN_POLICY_PATH = "merlin_policy.pkl"
 
 ROOT = Path(__file__).resolve().parent
