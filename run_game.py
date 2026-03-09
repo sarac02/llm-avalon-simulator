@@ -11,6 +11,9 @@ from avalon_role_agent import AvalonRoleAgent
 from llm_caller import AvalonLLMCaller
 
 
+USE_RL = True
+MERLIN_POLICY_PATH = "merlin_policy.pkl"
+
 ROOT = Path(__file__).resolve().parent
 ROLES_DIR = ROOT / "roles"
 
@@ -156,6 +159,13 @@ def main():
             "(e.g., pip install openai) and set OPENAI_API_KEY + AVALON_API_BASE before running the game."
         ) from exc
 
+    merlin_policy = None
+
+    if USE_RL:
+        from rl.merlin_policy_inference import MerlinPolicy
+        merlin_policy = MerlinPolicy(MERLIN_POLICY_PATH)
+        print("RL Merlin policy loaded.")
+
     agents: List[Any] = []
     for name in names:
         role_key = canonical_role_key(role_map[name]).replace(" ", "_")
@@ -163,7 +173,16 @@ def main():
         if role_file_key == "servant":
             role_file_key = "loyal_servant"
         brief = role_briefs.get(role_file_key, "")
-        agents.append(AvalonRoleAgent(name=name, role=role_map[name], llm=llm_backend, role_notes=brief))
+        agents.append(
+            AvalonRoleAgent(
+                name=name,
+                role=role_map[name],
+                llm=llm_backend,
+                role_notes=brief,
+                merlin_policy=merlin_policy if name == "P0" else None,
+                use_rl=USE_RL if name == "P0" else False,
+            )
+        )
     team_sizes, fails_required = mission_rules_for_players(len(agents))
     cfg = AvalonConfig(
         num_players=len(agents),

@@ -220,7 +220,13 @@ class AvalonEnv:
             proposals=list(s.proposals),
             missions=list(s.missions),
             phase=s.phase.value,
-            extra={"last_team_votes": dict(s.last_team_votes), "last_quest_fails": s.last_quest_fails},
+            extra={
+                "last_team_votes": dict(s.last_team_votes),
+                "last_quest_fails": s.last_quest_fails,
+                "roles": {p: self.player_info[p].role for p in self.players},
+                "alignments": {p: self.player_info[p].alignment for p in self.players},
+                "vote_rows_so_far": self._build_vote_rows_so_far(),
+            },        
         )
 
     def _call_agent(self, name: str, fn_name: str, *args) -> Any:
@@ -679,3 +685,20 @@ class AvalonEnv:
             return
 
         raise RuntimeError(f"Unknown phase: {s.phase}")
+    
+    def _build_vote_rows_so_far(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for prop in self.state.proposals:
+            team = list(prop.team or [])
+            for voter, vote in (prop.votes or {}).items():
+                rows.append({
+                    "round_idx": prop.round_idx,
+                    "proposal_idx_in_round": prop.proposal_idx,
+                    "voter": voter,
+                    "vote": "APPROVE" if vote else "REJECT",
+                    "team": team,
+                    "team_size": len(team),
+                    "latest_evil_suspects": [],
+                    "latest_good_suspects": [],
+                })
+        return rows
