@@ -55,6 +55,9 @@ class AvalonLLMCaller:
         t = text or ""
         if "</think>" in t:
             t = t.split("</think>")[-1]
+        #fallback incase the model doesnt output the </think> tag
+        elif "<think>" in t:
+            t = re.sub(r"<think>.*", "", t, flags=re.DOTALL)
         return t.strip()
 
     def generate(self, *, system: str, user: str, max_tokens: int = 300) -> str:

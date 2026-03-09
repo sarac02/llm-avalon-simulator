@@ -770,7 +770,7 @@ class AvalonRoleAgent:
             f"{game_summary}\n\n"
             "Recent discussion:\n"
             f"{self._chat(state)}\n\n"
-            "Choose one player id as target (the player you believe is Merlin). "
+            "Choose one player id as target (the player you believe is Merlin). Use exactly one of: " + ", ".join(state.players) + ". " 
             "Merlin often: gave information that helped good, was on successful teams, or was trusted by others. "
             "reasoning: explain why you suspect this player. Use only public information."
         )
