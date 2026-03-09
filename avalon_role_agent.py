@@ -15,6 +15,7 @@ class AvalonRoleAgent:
         llm,
         role_notes="",
         merlin_policy=None,
+        suspicion_policy=None,
         use_rl=False,
     ):
         self.name = name
@@ -23,6 +24,7 @@ class AvalonRoleAgent:
         self.role_notes = role_notes.strip()
         self.last_reasoning: str = ""
         self.merlin_policy = merlin_policy
+        self.suspicion_policy = suspicion_policy
         self.use_rl = use_rl
 
     def _system(self, state) -> str:
@@ -308,6 +310,7 @@ class AvalonRoleAgent:
         game_summary = self._game_context_summary(state)
         recent_chat = self._chat(state)
         merlin_rl_hint = self._format_merlin_rl_hint(state)
+        suspicion_rl_hint = self._format_suspicion_rl_hint(state)
 
         if not state.current_team:
             mission_nudge = ""
@@ -375,6 +378,7 @@ class AvalonRoleAgent:
             "Game history:\n"
             f"{game_summary}\n\n"
             f"{merlin_rl_hint}"
+            f"{suspicion_rl_hint}"
             "What others just said (respond to specific points when relevant):\n"
             f"{recent_chat}\n\n"
             + (
@@ -629,6 +633,7 @@ class AvalonRoleAgent:
 
     def propose_team(self, state, team_size: int):
         merlin_rl_hint = self._format_merlin_rl_hint(state)
+        suspicion_rl_hint = self._format_suspicion_rl_hint(state)
         game_summary = self._game_context_summary(state)
         user = (
             'Output JSON: {"team": [string], "reasoning": string}\n\n'
@@ -637,6 +642,7 @@ class AvalonRoleAgent:
             "Game history:\n"
             f"{game_summary}\n\n"
             f"{merlin_rl_hint}"
+            f"{suspicion_rl_hint}"
             "Choose exactly " + str(team_size) + " player ids for your team. "
             "team: array of exactly " + str(team_size) + " strings (e.g. [\"P0\", \"P2\"]). "
             "reasoning: one sentence explaining why you chose this lineup (use public info: mission results, who you trust or suspect). No role reveal."
@@ -676,6 +682,7 @@ class AvalonRoleAgent:
         """Vote must align with the discussion: use LLM so the vote matches what the agent said."""
         game_summary = self._game_context_summary(state)
         merlin_rl_hint = self._format_merlin_rl_hint(state)
+        suspicion_rl_hint = self._format_suspicion_rl_hint(state)
         recent_chat = self._chat(state, k=20)
         user = (
             'Output JSON: {"vote": "approve" or "reject", "reasoning": string}\n\n'
@@ -683,6 +690,7 @@ class AvalonRoleAgent:
             "Game history:\n"
             f"{game_summary}\n\n"
             f"{merlin_rl_hint}"
+            f"{suspicion_rl_hint}"
             "What you and others just said (your vote should be consistent with your stated position):\n"
             f"{recent_chat}\n\n"
             "Decide whether you approve or reject this team. Your vote must align with what you said in the discussion (e.g. if you said you're comfortable approving, vote approve; if you said you're cautious or want to reject, vote reject). "
@@ -802,6 +810,7 @@ class AvalonRoleAgent:
             "Use this as private guidance for who is most likely Merlin."
             "Merlin knows who is evil."
             "Do not mention signals or Merlin."
+            "Ignore these signals if you are Merlin."
         )
 
         return "\n".join(lines) + "\n\n"
@@ -825,4 +834,61 @@ class AvalonRoleAgent:
             "consecutive_rejections_before": state.proposal_idx - 1,
             "current_team": state.current_team,
             "vote_rows_so_far": state.extra.get("vote_rows_so_far", []),
+        }
+    
+    def _get_suspicion_scores(self, state) -> Dict[str, float] | None:
+        if self.name != "P0":
+            return None
+        if not self.use_rl or self.suspicion_policy is None:
+            return None
+
+        try:
+            current_state = self._build_suspicion_state(state)
+            return self.suspicion_policy.score_candidates(current_state, viewer=self.name)
+        except Exception:
+            return None
+
+
+    def _format_suspicion_rl_hint(self, state) -> str:
+        scores = self._get_suspicion_scores(state)
+        if not scores:
+            return ""
+
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+
+        lines = ["--- LEARNED SUSPICION SIGNAL ---"]
+        for p, s in ranked:
+            lines.append(f"{p}: {s:.3f}")
+
+        lines.append(
+            "Use this as private guidance for who is most suspicious. "
+            "Do NOT reveal mention signals."
+            "Ignore this if you are evil."
+        )
+
+        return "\n".join(lines) + "\n\n"
+
+
+    def _ranked_suspicious_candidates(self, state) -> List[str]:
+        scores = self._get_suspicion_scores(state)
+        if not scores:
+            return []
+        return [p for p, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)]
+
+    def _build_suspicion_state(self, state):
+        extra = getattr(state, "extra", {}) or {}
+        return {
+            "players": state.players,
+            "roles": extra.get("roles", {}),
+            "alignments": extra.get("alignments", {}),
+            "round_idx": state.round_idx,
+            "proposal_idx_in_round": state.proposal_idx,
+            "score_good": state.num_successes,
+            "score_evil": state.num_fails,
+            "consecutive_rejections_before": state.proposal_idx - 1,
+            "current_team": state.current_team,
+            "leader": state.current_proposer,
+            "leader_alignment": extra.get("alignments", {}).get(state.current_proposer),
+            "vote_rows_so_far": extra.get("vote_rows_so_far", []),
+            "mission_rows_so_far": extra.get("mission_rows_so_far", []),
         }

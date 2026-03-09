@@ -1,3 +1,5 @@
 /logs
+/merlin_logs
+/old_logs
 /__pycache__
 *.ipynb

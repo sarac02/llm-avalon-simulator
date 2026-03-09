@@ -226,7 +226,8 @@ class AvalonEnv:
                 "roles": {p: self.player_info[p].role for p in self.players},
                 "alignments": {p: self.player_info[p].alignment for p in self.players},
                 "vote_rows_so_far": self._build_vote_rows_so_far(),
-            },        
+                "mission_rows_so_far": self._build_mission_rows_so_far(),
+            },       
         )
 
     def _call_agent(self, name: str, fn_name: str, *args) -> Any:
@@ -690,15 +691,42 @@ class AvalonEnv:
         rows: List[Dict[str, Any]] = []
         for prop in self.state.proposals:
             team = list(prop.team or [])
+            evil_on_team_count = sum(
+                1 for p in team if self.player_info[p].alignment == "evil"
+            )
             for voter, vote in (prop.votes or {}).items():
                 rows.append({
                     "round_idx": prop.round_idx,
+                    "proposal_id": prop.proposal_idx,
                     "proposal_idx_in_round": prop.proposal_idx,
                     "voter": voter,
                     "vote": "APPROVE" if vote else "REJECT",
                     "team": team,
                     "team_size": len(team),
+                    "leader": prop.proposer,
+                    "leader_alignment": self.player_info[prop.proposer].alignment,
+                    "evil_on_team_count": evil_on_team_count,
                     "latest_evil_suspects": [],
                     "latest_good_suspects": [],
+                    "accuses_leader": False,
+                    "trusts_leader": False,
+                    "accuses_team_member_count": 0,
+                    "trusts_team_member_count": 0,
+                    "latest_reasoning_len": 0,
                 })
+        return rows
+    
+    def _build_mission_rows_so_far(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for i, mission in enumerate(self.state.missions):
+            team = list(mission.team or [])
+            rows.append({
+                "round_idx": mission.round_idx,
+                "proposal_id": i + 1,
+                "team": team,
+                "quest_result": "FAILED" if mission.outcome == "fail" else "SUCCESS",
+                "team_evil_count": sum(
+                    1 for p in team if self.player_info[p].alignment == "evil"
+                ),
+            })
         return rows

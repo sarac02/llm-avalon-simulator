@@ -11,7 +11,7 @@ from avalon_role_agent import AvalonRoleAgent
 from llm_caller import AvalonLLMCaller
 
 
-USE_RL = False
+USE_RL = True
 MERLIN_POLICY_PATH = "merlin_policy.pkl"
 
 ROOT = Path(__file__).resolve().parent
@@ -161,10 +161,14 @@ def main():
 
     merlin_policy = None
 
+    suspicion_policy = None
+
     if USE_RL:
         from rl.merlin_policy_inference import MerlinPolicy
-        merlin_policy = MerlinPolicy(MERLIN_POLICY_PATH)
-        print("RL Merlin policy loaded.")
+        from rl.suspicion_policy_inference import SuspicionPolicy
+
+        merlin_policy = MerlinPolicy("merlin_policy.pkl")
+        suspicion_policy = SuspicionPolicy("suspicion_policy.pkl")
 
     agents: List[Any] = []
     for name in names:
@@ -180,6 +184,7 @@ def main():
                 llm=llm_backend,
                 role_notes=brief,
                 merlin_policy=merlin_policy if name == "P0" else None,
+                suspicion_policy=suspicion_policy if name == "P0" else None,
                 use_rl=USE_RL if name == "P0" else False,
             )
         )
