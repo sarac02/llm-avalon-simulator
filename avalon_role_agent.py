@@ -16,6 +16,7 @@ class AvalonRoleAgent:
         role_notes="",
         merlin_policy=None,
         suspicion_policy=None,
+        team_generation_policy=None,
         use_rl=False,
     ):
         self.name = name
@@ -25,6 +26,7 @@ class AvalonRoleAgent:
         self.last_reasoning: str = ""
         self.merlin_policy = merlin_policy
         self.suspicion_policy = suspicion_policy
+        self.team_generation_policy = team_generation_policy
         self.use_rl = use_rl
 
     def _system(self, state) -> str:
@@ -311,6 +313,7 @@ class AvalonRoleAgent:
         recent_chat = self._chat(state)
         merlin_rl_hint = self._format_merlin_rl_hint(state)
         suspicion_rl_hint = self._format_suspicion_rl_hint(state)
+        team_generation_rl_hint = self._format_team_generation_rl_hint(state)
 
         if not state.current_team:
             mission_nudge = ""
@@ -379,6 +382,7 @@ class AvalonRoleAgent:
             f"{game_summary}\n\n"
             f"{merlin_rl_hint}"
             f"{suspicion_rl_hint}"
+            f"{team_generation_rl_hint}"
             "What others just said (respond to specific points when relevant):\n"
             f"{recent_chat}\n\n"
             + (
@@ -634,6 +638,7 @@ class AvalonRoleAgent:
     def propose_team(self, state, team_size: int):
         merlin_rl_hint = self._format_merlin_rl_hint(state)
         suspicion_rl_hint = self._format_suspicion_rl_hint(state)
+        team_generation_rl_hint = self._format_team_generation_rl_hint(state)
         game_summary = self._game_context_summary(state)
         user = (
             'Output JSON: {"team": [string], "reasoning": string}\n\n'
@@ -643,6 +648,7 @@ class AvalonRoleAgent:
             f"{game_summary}\n\n"
             f"{merlin_rl_hint}"
             f"{suspicion_rl_hint}"
+            f"{team_generation_rl_hint}"
             "Choose exactly " + str(team_size) + " player ids for your team. "
             "team: array of exactly " + str(team_size) + " strings (e.g. [\"P0\", \"P2\"]). "
             "reasoning: one sentence explaining why you chose this lineup (use public info: mission results, who you trust or suspect). No role reveal."
@@ -891,4 +897,56 @@ class AvalonRoleAgent:
             "leader_alignment": extra.get("alignments", {}).get(state.current_proposer),
             "vote_rows_so_far": extra.get("vote_rows_so_far", []),
             "mission_rows_so_far": extra.get("mission_rows_so_far", []),
+        }
+    
+
+    def _get_team_generation_scores(self, state) -> Dict[str, float] | None:
+        if self.name != "P0":
+            return None
+        if not self.use_rl or self.team_generation_policy is None:
+            return None
+
+        try:
+            current_state = self._build_team_generation_state(state)
+            return self.team_generation_policy.score_candidates(current_state, viewer=self.name)
+        except Exception as e:
+            print(f"Team Generation Scoring Error: {e}")
+            return None
+
+    def _format_team_generation_rl_hint(self, state) -> str:
+        scores = self._get_team_generation_scores(state)
+        if not scores:
+            return ""
+
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+
+        lines = ["--- LEARNED TEAM GENERATION SIGNAL ---"]
+        for p, s in ranked:
+            lines.append(f"{p}: {s:.3f}")
+
+        lines.append(
+            "Use this as private guidance for who to propose for the current mission."
+            "Do not mention signals"
+        )
+
+        return "\n".join(lines) + "\n\n"
+
+    def _ranked_team_candidates(self, state) -> List[str]:
+        scores = self._get_team_generation_scores(state)
+        if not scores:
+            return []
+        return [p for p, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)]
+
+    def _build_team_generation_state(self, state):
+        return {
+            "players": state.players,
+            "roles": state.extra.get("roles", {}),
+            "alignments": state.extra.get("alignments", {}),
+            "round_idx": state.round_idx,
+            "proposal_idx_in_round": state.proposal_idx,
+            "score_good": state.num_successes,
+            "score_evil": state.num_fails,
+            "consecutive_rejections_before": state.proposal_idx - 1,
+            "current_team": state.current_team,
+            "vote_rows_so_far": state.extra.get("vote_rows_so_far", []),
         }

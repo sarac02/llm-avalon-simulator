@@ -163,12 +163,17 @@ def main():
 
     suspicion_policy = None
 
+    team_generation_policy = None
+
+
     if USE_RL:
         from rl.merlin_policy_inference import MerlinPolicy
         from rl.suspicion_policy_inference import SuspicionPolicy
+        from rl.team_generation_policy_inference import TeamGenerationPolicy
 
         merlin_policy = MerlinPolicy("merlin_policy.pkl")
         suspicion_policy = SuspicionPolicy("suspicion_policy.pkl")
+        team_generation_policy = TeamGenerationPolicy("team_generation_policy.pkl")
 
     agents: List[Any] = []
     for name in names:
@@ -185,6 +190,7 @@ def main():
                 role_notes=brief,
                 merlin_policy=merlin_policy if name == "P0" else None,
                 suspicion_policy=suspicion_policy if name == "P0" else None,
+                team_generation_policy=team_generation_policy if name == "P0" else None,
                 use_rl=USE_RL if name == "P0" else False,
             )
         )
