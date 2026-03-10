@@ -84,8 +84,8 @@ def build_role_list(num_players: int) -> List[str]:
 
     if num_players == 6:
         print('5 player system used')
-        required = ["Merlin", "Loyal Servant", "Loyal Servant", "Assassin", "Minion of Mordred"]
-        missing = [r for r in {"Merlin", "Loyal Servant", "Assassin", "Minion of Mordred"} if r not in available]
+        required = ["Merlin", "Percival", "Loyal Servant", "Assassin", "Morgana"]
+        missing = [r for r in {"Merlin", "Percival", "Loyal Servant", "Assassin", "Morgana"} if r not in available]
         if missing:
             raise RuntimeError(f"roles folder is missing required 5-player roles: {missing}")
         return required
@@ -151,7 +151,7 @@ def main():
         llm_backend.generate(
             system="Return valid JSON only.",
             user='{"ok": true}',
-            max_tokens=16,
+            max_tokens=500,
         )
     except Exception as exc:
         raise RuntimeError(
@@ -169,7 +169,7 @@ def main():
     if USE_RL:
         from rl.merlin_policy_inference import MerlinPolicy
         from rl.suspicion_policy_inference import SuspicionPolicy
-        from rl.team_generation_policy_inference import TeamGenerationPolicy
+        from rl.team_generation_policy_inference import TeamGenPolicy as TeamGenerationPolicy
 
         merlin_policy = MerlinPolicy("merlin_policy.pkl")
         suspicion_policy = SuspicionPolicy("suspicion_policy.pkl")
@@ -211,8 +211,10 @@ def main():
     env.reset(leader_idx=0)
     final = env.run_game()
 
-    # Write transcript and accusations to logs/ (one timestamp per run)
-    logs_dir = ROOT / "logs"
+    # Write transcript and accusations (use separate default dir for RL runs)
+    # Optional override: AVALON_LOGS_DIR=/path/to/folder
+    default_logs_dir = "logs_rl" if USE_RL else "logs"
+    logs_dir = Path(os.environ.get("AVALON_LOGS_DIR", str(ROOT / default_logs_dir))).resolve()
     logs_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_path = logs_dir / f"log_{ts}.txt"
