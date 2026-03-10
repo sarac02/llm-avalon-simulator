@@ -761,6 +761,7 @@ class AvalonRoleAgent:
 
     def assassinate(self, state):
         game_summary = self._game_context_summary(state)
+        merlin_rl_hint = self._format_merlin_rl_hint(state)
         user = (
             'Output JSON with keys "target" and "reasoning". '
             'target: one player id, e.g. "P0" or "P1". reasoning: why you suspect they are Merlin.\n\n'
@@ -768,6 +769,7 @@ class AvalonRoleAgent:
             f"Players: {state.players}. You are {self.name} (do not target yourself).\n\n"
             "Game history:\n"
             f"{game_summary}\n\n"
+            f"{merlin_rl_hint}"
             "Recent discussion:\n"
             f"{self._chat(state)}\n\n"
             "Choose one player id as target (the player you believe is Merlin). Use exactly one of: " + ", ".join(state.players) + ". " 
@@ -778,7 +780,7 @@ class AvalonRoleAgent:
             system=self._system(state),
             user=user,
             schema='{"target": string, "reasoning": string}',
-            max_tokens=140,
+            max_tokens=500,
         )
         reasoning = self._clean_text(str(obj.get("reasoning", "") or ""))
         self.last_reasoning = reasoning or ""
