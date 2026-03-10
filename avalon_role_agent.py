@@ -658,7 +658,7 @@ class AvalonRoleAgent:
             system=self._system(state),
             user=user,
             schema='{"team": [string], "reasoning": string}',
-            max_tokens=180,
+            max_tokens=600,
         )
         self.last_reasoning = self._clean_text(str(obj.get("reasoning", "")))
         raw_team = obj.get("team", [])
