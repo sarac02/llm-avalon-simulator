@@ -1,4 +1,62 @@
 # llm-avalon-simulator
+# LLM Avalon Simulator
+
+A multi-agent LLM simulator for **The Resistance: Avalon**, designed to study how language-model agents reason under hidden information, deception, partial observability, team formation, voting, and role-based objectives.
+
+The project simulates a full Avalon game loop with LLM-driven players. Each agent receives a private role, observes the public game state, participates in discussion, proposes teams, votes on teams, chooses quest actions, and performs endgame assassination when applicable. The environment enforces Avalon rules while the agents make strategic decisions through role-conditioned prompts and structured response parsing.
+
+---
+
+## Overview
+
+Avalon is a hidden-role social deduction game where players are divided into two teams:
+
+- **Good players** try to complete three successful quests.
+- **Evil players** try to sabotage quests or identify Merlin at the end.
+- **Merlin** knows the evil players but must avoid revealing themselves.
+- **Assassin** can steal the win for evil by correctly identifying Merlin after three successful quests.
+- **Percival**, **Morgana**, loyal servants, and other roles introduce uncertainty and deception.
+
+This simulator uses LLM agents to model these behaviors and evaluate whether language models can reason strategically in a multi-agent, partially observable environment.
+
+---
+
+## Key Features
+
+- Full Avalon game loop:
+  - Discussion
+  - Team proposal
+  - Team vote
+  - Quest execution
+  - Win/loss tracking
+  - Merlin assassination phase
+
+- Role-conditioned LLM agents:
+  - Merlin, Assassin, Percival, Morgana, Loyal Servant, and other supported roles
+  - Each agent receives only the information allowed by its role
+  - Agents generate natural language reasoning and structured game actions
+
+- Rule-enforced environment:
+  - Validates team sizes
+  - Tracks proposal attempts
+  - Enforces majority vote approval
+  - Handles failed proposals
+  - Computes quest success/failure
+  - Triggers assassination after three good quest wins
+
+- Modular architecture:
+  - Game environment and rules are separated from agent logic
+  - LLM API calls are isolated in a caller module
+  - Role behavior, response parsing, and validation live in the agent module
+  - RL-style policies can be plugged in for team generation, suspicion, and approval behavior
+
+- Logging and evaluation support:
+  - Step-by-step game traces
+  - Proposal, vote, quest, and outcome logging
+  - Log parsing utilities for downstream analysis and RL-style datasets
+
+---
+
 
 Files: 
 
